@@ -4,6 +4,62 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Chaise Runner - Bordeaux</title>
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
+import { getFirestore, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+
+// ⚠️ REMPLACE CETTE CONFIG PAR LA TIENNE (obtenue sur console.firebase.google.com)
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyCZKYOWhfJHoKy6cpl2Fsg6s_FBddh8Mkk",
+  authDomain: "bordeaux-runner.firebaseapp.com",
+  projectId: "bordeaux-runner",
+  storageBucket: "bordeaux-runner.firebasestorage.app",
+  messagingSenderId: "324097985070",
+  appId: "1:324097985070:web:0f3b65388ab9daafaeadbf"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// Rendre les fonctions accessibles au script principal
+window.submitScore = async function(name, score) {
+  try {
+    await addDoc(collection(db, "scores"), {
+      name: name.substring(0, 15),
+      score: score,
+      timestamp: serverTimestamp()
+    });
+    console.log("Score enregistré !");
+    return true;
+  } catch (e) {
+    console.error("Erreur:", e);
+    return false;
+  }
+};
+
+window.fetchLeaderboard = async function() {
+  try {
+    const q = query(collection(db, "scores"), orderBy("score", "desc"), limit(10));
+    const snap = await getDocs(q);
+    const scores = [];
+    snap.forEach(doc => scores.push(doc.data()));
+    return scores;
+  } catch (e) {
+    console.error("Erreur:", e);
+    return [];
+  }
+};
+
+window.firebaseReady = true;
+</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{overflow:hidden;touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
@@ -36,6 +92,41 @@ let score=0,bestScore=0,speed=5,frameCount=0;
 let shakeX=0,shakeY=0;
 let lastSpeedLevel=0;
 let speedUpTimer=0; // for flash notification
+
+// ===== LEADERBOARD =====
+let playerName = localStorage.getItem('br_playerName') || '';
+let leaderboard = [];
+let leaderboardLoaded = false;
+let scoreSubmitted = false;
+
+function askPlayerName() {
+  let name = prompt('Entrez votre pseudo (max 15 caractères) :', playerName || '');
+  if (name && name.trim().length > 0) {
+    playerName = name.trim().substring(0, 15);
+    localStorage.setItem('br_playerName', playerName);
+    return true;
+  }
+  return false;
+}
+
+async function loadLeaderboard() {
+  if (!window.firebaseReady) return;
+  try {
+    leaderboard = await window.fetchLeaderboard();
+    leaderboardLoaded = true;
+  } catch(e) { console.error(e); }
+}
+
+async function saveScore() {
+  if (!window.firebaseReady || !playerName || scoreSubmitted || score === 0) return;
+  scoreSubmitted = true;
+  await window.submitScore(playerName, score);
+  await loadLeaderboard();
+}
+
+// Charger le classement au démarrage
+if (window.firebaseReady) loadLeaderboard();
+else setTimeout(loadLeaderboard, 1000);
 
 const player={x:150,y:GROUND,vy:0,onGround:true,bounce:0,rot:0};
 const GRAVITY=0.6;
@@ -273,7 +364,15 @@ function drawSpeedUp(){
 
 // ===== GAME LOGIC =====
 function jump(){
-    if(state==='start'){state='play';signX=W+100;signShown=false;return;}
+    if(state==='start'){
+        // Demander le pseudo au premier lancement
+        if(!playerName){
+            if(!askPlayerName()) return; // annulé
+        }
+        state='play';signX=W+100;signShown=false;
+        scoreSubmitted=false;
+        return;
+    }
     if(state==='over'){resetG();return;}
     if(player.onGround){player.vy=JUMP;player.onGround=false;}
 }
@@ -326,7 +425,7 @@ function update(){
 
         const py=player.y+player.bounce;
         if(player.x+18>b.x-11+3&&player.x-18<b.x+11-3&&py>GROUND-b.h-5+8&&py-75<GROUND){
-            state='over';if(score>bestScore)bestScore=score;shakeX=10;shakeY=6;
+            state='over';if(score>bestScore)bestScore=score;shakeX=10;shakeY=6;saveScore();
         }
     }
     shakeX*=0.88;shakeY*=0.88;
@@ -380,8 +479,28 @@ function render(){
         ctx.font='18px Arial';ctx.fillStyle='#e0e0e0';ctx.textAlign='center';
         ctx.fillText("Saute par-dessus les bouteilles d'eau !",W/2,H/2-22);
 
+        // Classement mondial (top 5)
+        if(leaderboardLoaded && leaderboard.length>0){
+            ctx.fillStyle='rgba(0,0,0,0.4)';
+            ctx.fillRect(W-200,H/2-80,190,Math.min(leaderboard.length,5)*20+40);
+            ctx.fillStyle='#FFD700';ctx.font='bold 14px Arial';ctx.textAlign='left';
+            ctx.fillText('CLASSEMENT MONDIAL',W-190,H/2-60);
+            ctx.font='12px Arial';ctx.fillStyle='#fff';
+            for(let i=0;i<Math.min(leaderboard.length,5);i++){
+                const e=leaderboard[i];
+                ctx.fillText((i+1)+'. '+e.name,W-190,H/2-40+i*18);
+                ctx.textAlign='right';
+                ctx.fillText(e.score,W-20,H/2-40+i*18);
+                ctx.textAlign='left';
+            }
+        }
+        if(playerName){
+            ctx.font='12px Arial';ctx.fillStyle='#aaa';ctx.textAlign='center';
+            ctx.fillText('Joueur: '+playerName+' (clic droit sur écran pour changer)',W/2,H-20);
+        }
+
         const pa=0.5+Math.sin(Date.now()*0.005)*0.5;
-        ctx.globalAlpha=pa;ctx.font='bold 16px Arial';ctx.fillStyle='#FFD700';
+        ctx.globalAlpha=pa;ctx.font='bold 16px Arial';ctx.fillStyle='#FFD700';ctx.textAlign='center';
         ctx.fillText('[ ESPACE / CLIC / TOUCHER pour jouer ]',W/2,H/2+130);
         ctx.globalAlpha=1;
     }
@@ -397,6 +516,19 @@ function render(){
         ctx.font='16px Arial';ctx.fillStyle='rgba(255,255,255,0.6)';
         ctx.fillText('Vitesse atteinte: x'+lvl2,W/2,H/2+30);
         if(score===bestScore&&score>0){ctx.fillStyle='#FFD700';ctx.font='20px Arial';ctx.fillText('Nouveau record !',W/2,H/2+60);}
+
+        // Top 3 mondial
+        if(leaderboardLoaded && leaderboard.length>0){
+            ctx.fillStyle='#FFD700';ctx.font='bold 14px Arial';ctx.textAlign='center';
+            ctx.fillText('TOP 3 MONDIAL',W/2,H-90);
+            ctx.font='13px Arial';ctx.fillStyle='#fff';
+            for(let i=0;i<Math.min(leaderboard.length,3);i++){
+                const e=leaderboard[i];
+                const medal=i===0?'🥇':i===1?'🥈':'🥉';
+                ctx.fillText(medal+' '+e.name+' — '+e.score,W/2,H-70+i*16);
+            }
+        }
+
         const p2=0.5+Math.sin(Date.now()*0.005)*0.5;
         ctx.globalAlpha=p2;ctx.font='17px Arial';ctx.fillStyle='#bbb';
         ctx.fillText('[ ESPACE / CLIC / TOUCHER pour rejouer ]',W/2,H/2+100);
